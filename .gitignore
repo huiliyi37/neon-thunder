@@ -1,0 +1,4 @@
+node_modules/
+.rivet/
+.DS_Store
+*.log

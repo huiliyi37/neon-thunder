@@ -1,0 +1,15 @@
+{
+  "name": "leiting-thunder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "雷霆战机 — 零依赖 Canvas 2D 竖版弹幕射击游戏（致敬经典街机射击）",
+  "type": "module",
+  "scripts": {
+    "dev": "node tools/serve.mjs",
+    "start": "node tools/serve.mjs",
+    "check": "node tools/check.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

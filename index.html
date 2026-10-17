@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#04060f" />
+<title>THUNDER · 雷霆战机</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M50 6 L64 44 L94 58 L64 64 L56 94 L50 78 L44 94 L36 64 L6 58 L36 44 Z' fill='%235ff7ff'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+<div id="stage">
+  <canvas id="game" width="480" height="800"></canvas>
+  <div id="scanlines" aria-hidden="true"></div>
+
+  <!-- 开始界面 -->
+  <section id="menu" class="overlay">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 100 100" width="72" height="72">
+          <defs>
+            <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#9ffcff" />
+              <stop offset="1" stop-color="#1e7bff" />
+            </linearGradient>
+          </defs>
+          <path d="M50 6 L64 44 L94 58 L64 64 L56 94 L50 78 L44 94 L36 64 L6 58 L36 44 Z"
+                fill="url(#bg)" stroke="#bff9ff" stroke-width="1.5" stroke-linejoin="round" />
+          <circle cx="50" cy="52" r="5" fill="#041018" />
+        </svg>
+      </div>
+      <h1>THUNDER</h1>
+      <p class="brand-cn">雷 霆 战 机</p>
+    </div>
+
+    <div class="menu-actions">
+      <button id="btn-start" class="btn btn-primary">
+        <span class="btn-arrow">▶</span> 开始出击
+      </button>
+      <button id="btn-sound" class="btn btn-ghost">音效 · 开</button>
+    </div>
+
+    <div class="controls-card">
+      <div class="ctrl-row"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>／</span><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd><span class="ctrl-desc">移动</span></div>
+      <div class="ctrl-row"><kbd>Shift</kbd><span class="ctrl-desc">精准模式（显示判定点）</span></div>
+      <div class="ctrl-row"><kbd>Space</kbd><span class="ctrl-desc">释放炸弹</span></div>
+      <div class="ctrl-row"><kbd>P</kbd><span class="ctrl-desc">暂停</span><span class="ctrl-sep">·</span><kbd>M</kbd><span class="ctrl-desc">静音</span></div>
+      <div class="ctrl-row ctrl-touch"><span class="ctrl-desc">触屏：拖动移动 · 双击释放炸弹</span></div>
+    </div>
+
+    <p class="hiscore-line">最高分 <b id="menu-hiscore">0</b></p>
+  </section>
+
+  <!-- 暂停界面 -->
+  <section id="pause" class="overlay hidden">
+    <div class="panel">
+      <h2>已 暂 停</h2>
+      <div class="menu-actions">
+        <button id="btn-resume" class="btn btn-primary">继续战斗</button>
+        <button id="btn-quit" class="btn btn-ghost">放弃任务</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 结算界面 -->
+  <section id="over" class="overlay hidden">
+    <div class="panel over-panel">
+      <p class="over-kicker">MISSION REPORT</p>
+      <h2 id="over-title">任 务 失 败</h2>
+      <div class="stats">
+        <div class="stat"><span class="stat-label">得分</span><b id="over-score">0</b></div>
+        <div class="stat"><span class="stat-label">击坠</span><b id="over-kills">0</b></div>
+        <div class="stat"><span class="stat-label">最高连击</span><b id="over-combo">0</b></div>
+        <div class="stat"><span class="stat-label">到达关卡</span><b id="over-stage">1</b></div>
+      </div>
+      <p id="over-record" class="record hidden">★ 新 纪 录 ★</p>
+      <div class="menu-actions">
+        <button id="btn-retry" class="btn btn-primary">再次出击</button>
+        <button id="btn-home" class="btn btn-ghost">返回标题</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
