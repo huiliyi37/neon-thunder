@@ -7,7 +7,7 @@
  */
 import { BOSS, ENEMY_TYPES, STAGE, VIEW } from '../config.js';
 import { C } from '../art/palette.js';
-import { drawBoss, drawEnemy, glow } from '../art/sprites.js';
+import { drawBoss, drawBossCore, drawEnemy, glow } from '../art/sprites.js';
 import {
   angleBetween, clamp, damp, rand, randInt, TAU, velocityToward,
 } from '../core/util.js';
@@ -205,7 +205,10 @@ export class Boss {
 
   reset(stage = 1) {
     this.stage = stage;
-    this.maxHp = BOSS.baseHp + BOSS.hpPerStage * (stage - 1);
+    this.form = 0;                 // 0 = 母舰，1 = 脱离后的核心
+    this.transition = 0;           // >0 表示形态切换演出的剩余时长
+    this.baseTotal = BOSS.baseHp + BOSS.hpPerStage * (stage - 1);
+    this.maxHp = Math.round(this.baseTotal * BOSS.formHp[0]);
     this.hp = this.maxHp;
     this.x = VIEW.w / 2;
     this.y = -190;
@@ -233,6 +236,11 @@ export class Boss {
   update(dt, game) {
     this.age += dt;
     this.flash = Math.max(0, this.flash - dt * 4.5);
+
+    if (this.transition > 0) {
+      this._updateTransition(dt, game);
+      return;
+    }
 
     if (this.dying) {
       this.deathTimer -= dt;
@@ -277,15 +285,62 @@ export class Boss {
       this.fireB = 1.6;
     }
 
-    // 移动：低血时更狂躁
-    const speedFactor = 0.55 + this.phase * 0.28;
-    this.x = VIEW.w / 2 + Math.sin(this.age * speedFactor) * (96 + this.phase * 10);
-    this.y = this.targetY + Math.sin(this.age * 0.9) * 12;
+    // 移动：低血时更狂躁；核心形态更快更飘
+    const isCore = this.form === 1;
+    const speedFactor = isCore ? 1.5 : 0.55 + this.phase * 0.28;
+    const ampX = isCore ? 142 : 96 + this.phase * 10;
+    this.x = VIEW.w / 2 + Math.sin(this.age * speedFactor) * ampX;
+    this.y = this.targetY + Math.sin(this.age * 0.9) * (isCore ? 20 : 12);
 
     this._attack(dt, game);
   }
 
+  /** 形态切换演出：母舰崩解，核心脱离 */
+  _updateTransition(dt, game) {
+    this.transition -= dt;
+    this.explodeTimer -= dt;
+    if (this.explodeTimer <= 0) {
+      this.explodeTimer = rand(0.05, 0.12);
+      game.fx.explosion(
+        this.x + rand(-84, 84), this.y + rand(-44, 54),
+        rand(0.8, 1.7), C.bossCore, '#ffd9ec',
+      );
+      game.renderer.shake(rand(5, 12), 0.3);
+    }
+    this.y += 9 * dt;
+    if (this.transition <= 0) this._enterCoreForm(game);
+  }
+
+  _enterCoreForm(game) {
+    this.form = 1;
+    this.maxHp = Math.round(this.baseTotal * BOSS.formHp[1]);
+    this.hp = this.maxHp;
+    this.radius = 44;
+    this.targetY = 200;
+    this.x = VIEW.w / 2;
+    this.y = 200;
+    this.flash = 1;
+    this.fireA = 1.0;
+    this.fireB = 1.5;
+    this.spiral = 0;
+    game.renderer.setZoom(1);
+    game.renderer.flash(C.bossCore, 0.55);
+    game.renderer.shake(15, 0.9);
+    game.fx.explosion(this.x, this.y, 2.4, C.bossCore, '#ffffff');
+    game.fx.ring(this.x, this.y, 230, '#ff6fc0', { life: 0.7, width: 4 });
+    game.banner('CORE OVERRIDE', 'PHASE 2', 2.0, C.uiMagenta);
+    game.audio.warning();
+    game.audio.setIntensity(1);
+    game.timeScale = 0.6;
+    game.timeScaleTimer = 0.5;
+  }
+
   _attack(dt, game) {
+    if (this.form === 1) {
+      this._attackCore(dt, game);
+      return;
+    }
+
     const p = game.player;
     const aim = angleBetween(this.x, this.y + 20, p.x, p.y);
 
@@ -352,32 +407,82 @@ export class Boss {
     game.audio.enemyShot?.();
   }
 
-  /** 返回 true 表示这一击造成死亡 */
+  /** 核心形态：螺旋 + 环形 + 瞄准穿甲三连，节奏比母舰密集得多 */
+  _attackCore(dt, game) {
+    const p = game.player;
+    const aim = angleBetween(this.x, this.y, p.x, p.y);
+    const rage = 1 + (1 - this.hpRatio) * 0.5;   // 血越低越狂暴
+
+    this.fireA -= dt * rage;
+    this.fireB -= dt * rage;
+    this.spiral -= dt;
+
+    if (this.spiral <= 0) {
+      this.spiral = 0.08 / rage;
+      for (let i = 0; i < 2; i++) {
+        const a = this.age * 3.7 + i * Math.PI;
+        game.bullets.spawnEnemy(this.x, this.y, a, 190, { radius: 5, color: '#ff9f43' });
+      }
+    }
+
+    if (this.fireA <= 0) {
+      this.fireA = 2.0;
+      game.bullets.ringEnemy(this.x, this.y, 16, 158, this.age * 0.5, { radius: 5.5, color: '#ff6fc0' });
+      this._chargeFx(game);
+    }
+
+    if (this.fireB <= 0) {
+      this.fireB = 1.45;
+      game.bullets.fanEnemy(this.x, this.y, aim, 3, 0.24, 285, {
+        kind: 'needle', color: '#ff7ab8', radius: 5, length: 20,
+      });
+      this._chargeFx(game);
+    }
+  }
+
+  /** 返回 true 表示这一击造成死亡（母舰段被击破只触发形态切换，不算死亡） */
   damage(amount, game) {
-    if (this.dying) return false;
+    if (this.dying || this.transition > 0) return false;
     this.hp -= amount;
     this.flash = Math.min(1, this.flash + 0.25);
-    if (this.hp <= 0) {
-      this.hp = 0;
-      this.dying = true;
-      this.deathTimer = 2.1;
-      game.audio.bossExplode();
-      game.renderer.shake(18, 1.2);
-      game.renderer.flash('#ffffff', 0.55);
-      return true;
+    if (this.hp > 0) return false;
+
+    if (this.form === 0) {
+      this._beginTransition(game);
+      return false;
     }
-    return false;
+
+    this.hp = 0;
+    this.dying = true;
+    this.deathTimer = 2.1;
+    game.audio.bossExplode();
+    game.renderer.shake(18, 1.2);
+    game.renderer.flash('#ffffff', 0.55);
+    return true;
+  }
+
+  _beginTransition(game) {
+    this.hp = 0;
+    this.transition = 1.7;
+    this.explodeTimer = 0;
+    this.flash = 1;
+    game.audio.bossExplode();
+    game.renderer.flash('#ffffff', 0.75);
+    game.renderer.shake(24, 1.4);
+    game.renderer.setZoom(0.93);
+    game.timeScale = 0.45;
+    game.timeScaleTimer = 0.9;
+    game.bullets.clearEnemyShots((x, y, c) => game.fx.spark(x, y, c || '#ff6fc0', 2, { speed: [40, 200] }));
   }
 
   draw(ctx) {
     ctx.save();
     ctx.translate(this.x, this.y);
-    drawBoss(ctx, {
-      t: this.age,
-      phase: this.phase,
-      flash: this.flash,
-      hpRatio: this.hpRatio,
-    });
+    if (this.form === 1) {
+      drawBossCore(ctx, { t: this.age, flash: this.flash, hpRatio: this.hpRatio });
+    } else {
+      drawBoss(ctx, { t: this.age, phase: this.phase, flash: this.flash, hpRatio: this.hpRatio });
+    }
     ctx.restore();
   }
 }

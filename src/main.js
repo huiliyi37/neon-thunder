@@ -103,6 +103,7 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min((now - last) / 1000, MAX_DT);
   last = now;
+  game.renderer.trackFrame(dt * 1000);
 
   // 全局按键（任何状态都响应）
   if (input.consume('mute')) {
@@ -120,6 +121,9 @@ function frame(now) {
 
   if (game.state === STATE.PLAYING && input.consume('bomb')) {
     game.useBomb();
+  }
+  if (game.state === STATE.PLAYING && input.consume('overdrive')) {
+    game.activateOverdrive();
   }
 
   // 子步长推进

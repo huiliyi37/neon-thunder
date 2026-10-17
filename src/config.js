@@ -60,7 +60,56 @@ export const SHOT = Object.freeze({
   laserWidth: 16,
   laserDps: 26,
   laserTickInterval: 0.06,
+  homingSpeed: 540,
+  homingTurnRate: 6.2,
+  homingLife: 2.4,
 });
+
+/* ── 武器流派 ──────────────────────────────────────────────
+ * 四类主炮，手感与战术定位完全不同：
+ *   PULSE  均衡连射——任何距离都稳
+ *   SPREAD 广域散射——近身清场，远距离衰减
+ *   LASER  持续光束——高 DPS 但必须对准，考验走位精度
+ *   HOMING 追踪导弹——自动索敌，节奏慢、单发重
+ * 等级（POWER 1-6）对所有类型通用，拾取 W 切换类型并保留等级。
+ */
+export const WEAPON_TYPES = Object.freeze(['pulse', 'spread', 'laser', 'homing']);
+
+export const WEAPON_META = Object.freeze({
+  pulse: { label: 'PULSE', color: '#5ff7ff', blurb: '均衡连射' },
+  spread: { label: 'SPREAD', color: '#ffd166', blurb: '广域散射' },
+  laser: { label: 'LASER', color: '#ff8ad0', blurb: '持续光束' },
+  homing: { label: 'HOMING', color: '#7dffd4', blurb: '追踪导弹' },
+});
+
+export const WEAPON_SPECS = Object.freeze({
+  pulse: WEAPONS,
+  spread: Object.freeze([
+    { kind: 'bullet', count: 3, spread: 26, angle: 0.18, interval: 0.150, damage: 0.62, options: 0 },
+    { kind: 'bullet', count: 4, spread: 24, angle: 0.20, interval: 0.145, damage: 0.62, options: 0 },
+    { kind: 'bullet', count: 5, spread: 22, angle: 0.24, interval: 0.140, damage: 0.66, options: 0 },
+    { kind: 'bullet', count: 6, spread: 20, angle: 0.28, interval: 0.135, damage: 0.68, options: 2 },
+    { kind: 'bullet', count: 7, spread: 18, angle: 0.32, interval: 0.130, damage: 0.70, options: 2 },
+    { kind: 'bullet', count: 9, spread: 16, angle: 0.40, interval: 0.125, damage: 0.72, options: 2 },
+  ]),
+  laser: Object.freeze([
+    { kind: 'laser', width: 13, tickInterval: 0.06, tickDamage: 0.95, options: 0 },
+    { kind: 'laser', width: 16, tickInterval: 0.06, tickDamage: 1.10, options: 0 },
+    { kind: 'laser', width: 19, tickInterval: 0.06, tickDamage: 1.28, options: 0 },
+    { kind: 'laser', width: 22, tickInterval: 0.06, tickDamage: 1.46, options: 2 },
+    { kind: 'laser', width: 26, tickInterval: 0.06, tickDamage: 1.68, options: 2 },
+    { kind: 'laser', width: 30, tickInterval: 0.06, tickDamage: 1.92, options: 2 },
+  ]),
+  homing: Object.freeze([
+    { kind: 'homing', count: 1, interval: 0.62, damage: 2.6, options: 0 },
+    { kind: 'homing', count: 1, interval: 0.56, damage: 3.0, options: 0 },
+    { kind: 'homing', count: 2, interval: 0.60, damage: 2.8, options: 0 },
+    { kind: 'homing', count: 2, interval: 0.54, damage: 3.1, options: 2 },
+    { kind: 'homing', count: 3, interval: 0.56, damage: 3.2, options: 2 },
+    { kind: 'homing', count: 4, interval: 0.50, damage: 3.4, options: 2 },
+  ]),
+});
+
 
 /** 炸弹：清屏 + 短暂无敌 */
 export const BOMB = Object.freeze({
@@ -69,6 +118,32 @@ export const BOMB = Object.freeze({
   damage: 60,
   radiusGrowth: 620,
   shake: 22,
+});
+
+/**
+ * 爆发 / OVERDRIVE —— 本作的核心爽点循环。
+ * 能量来自「击杀」与「擦弹」；满槽后主动释放，换来一段时间的火力与时间优势。
+ * 设计约束：敌方时间放慢但玩家不变慢，这是「子弹时间」的全部乐趣所在；
+ * 因此只缩放敌人、敌弹与 Boss，玩家射速反而提升。
+ */
+export const OVERDRIVE = Object.freeze({
+  maxEnergy: 100,
+  duration: 6.0,
+  killEnergy: 4.5,
+  bossHitEnergy: 0.25,
+  grazeEnergy: 2.4,
+  pickupEnergy: 7,
+  /** 擦弹判定：敌弹边缘到自机判定点的额外距离 */
+  grazeRadius: 26,
+  grazeScore: 35,
+  /** 敌方（敌机/敌弹/Boss）的时间缩放 */
+  enemyTimeScale: 0.42,
+  /** 玩家射击间隔乘数 */
+  fireRateScale: 0.48,
+  /** 玩家伤害乘数 */
+  damageScale: 1.35,
+  invuln: 1.0,
+  shakeOnStart: 16,
 });
 
 /** 敌机原型。hp / speed 会被关卡难度系数缩放。 */
@@ -118,14 +193,16 @@ export const PICKUP = Object.freeze({
   magnetSpeed: 420,
   radius: 13,
   lifetime: 14,
-  /** 掉落权重表：power 提升武器，shield 无敌，bomb 补充炸弹，life 加命 */
-  weights: { power: 58, shield: 20, bomb: 17, life: 5 },
+  /** 掉落权重表：power 提升武器等级，weapon 切换武器流派，shield 无敌，bomb 补炸弹，life 加命 */
+  weights: { power: 50, weapon: 14, shield: 18, bomb: 14, life: 4 },
 });
 
 /** Boss */
 export const BOSS = Object.freeze({
   baseHp: 620,
   hpPerStage: 240,
+  /** 两段血量占基础血量的比例：母舰段 / 核心段 */
+  formHp: [0.62, 0.58],
   radius: 64,
   enterDuration: 2.6,
   score: 12000,

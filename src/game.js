@@ -8,7 +8,7 @@
  *      └──(生命耗尽)──> over
  */
 import {
-  BOMB, FX, PLAYER, SCORING, STAGE, STORAGE_KEY, VIEW,
+  BOMB, FX, OVERDRIVE, PLAYER, SCORING, STAGE, STORAGE_KEY, VIEW,
 } from './config.js';
 import { C } from './art/palette.js';
 import { Background } from './art/background.js';
@@ -20,7 +20,7 @@ import { Boss, createEnemy, drawEnemyEntity, updateEnemy } from './entities/enem
 import { Player } from './entities/player.js';
 import { Spawner } from './systems/spawner.js';
 import { HUD } from './systems/hud.js';
-import { chance, circlesHit, formatScore, TAU } from './core/util.js';
+import { chance, circlesHit, dist2, formatScore, TAU } from './core/util.js';
 
 const STATE = {
   MENU: 'menu',
@@ -66,6 +66,13 @@ export class Game {
     this.timeScale = 1;
     this.timeScaleTimer = 0;
     this.shotsFired = 0;
+    this.overdriveVisual = 0;
+
+    // 爆发系统
+    this.energy = 0;
+    this.overdriveTimer = 0;
+    this.overdriveFlash = 0;
+    this.grazeCount = 0;
   }
 
   // ── 持久化 ──────────────────────────────────────────────
@@ -92,6 +99,66 @@ export class Game {
   }
 
   get playing() { return this.state === STATE.PLAYING; }
+  get overdriveActive() { return this.overdriveTimer > 0; }
+  get energyRatio() { return this.energy / OVERDRIVE.maxEnergy; }
+  get overdriveReady() { return this.energy >= OVERDRIVE.maxEnergy && this.overdriveTimer <= 0; }
+
+  // ── 爆发系统 ────────────────────────────────────────────
+
+  addEnergy(amount) {
+    if (this.overdriveTimer > 0) return;
+    this.energy = Math.min(OVERDRIVE.maxEnergy, this.energy + amount);
+  }
+
+  /** 擦弹：敌弹从判定点边缘掠过。整局最有味道的正反馈。 */
+  onGraze(bullet) {
+    this.grazeCount += 1;
+    this.addEnergy(OVERDRIVE.grazeEnergy);
+    this.score += Math.round(OVERDRIVE.grazeScore * this.multiplier);
+    const p = this.player;
+    this.fx.spark(bullet.x, bullet.y, '#bff9ff', 1, { speed: [20, 70], size: [0.8, 1.6], life: [0.1, 0.22] });
+    this.audio.graze();
+    if (this.grazeCount % 12 === 0) {
+      this.fx.text(p.x, p.y - 34, 'GRAZE', '#9ffcff', 11);
+    }
+  }
+
+  /** 释放爆发。返回是否成功。 */
+  activateOverdrive() {
+    if (!this.playing || this.overdriveTimer > 0) return false;
+    if (this.energy < OVERDRIVE.maxEnergy) return false;
+    if (!this.player.alive) return false;
+
+    this.energy = 0;
+    this.overdriveTimer = OVERDRIVE.duration;
+    this.overdriveFlash = 1;
+    this.player.invuln = Math.max(this.player.invuln, OVERDRIVE.invuln);
+
+    this.audio.overdrive();
+    this.audio.setIntensity(0.85);
+    this.renderer.flash('#7fd8ff', 0.5);
+    this.renderer.shake(OVERDRIVE.shakeOnStart, 0.7);
+    this.renderer.setZoom(1.035);
+    this.fx.ring(this.player.x, this.player.y, 320, '#9ffcff', { life: 0.6, width: 5 });
+    this.fx.spark(this.player.x, this.player.y, '#bff9ff', 40, { speed: [120, 520], size: [1.5, 3.4] });
+    this.banner('OVERDRIVE', 'TIME DILATION', 1.6, '#9ffcff');
+    return true;
+  }
+
+  _updateOverdrive(dt) {
+    if (this.overdriveTimer > 0) {
+      this.overdriveTimer = Math.max(0, this.overdriveTimer - dt);
+      if (this.overdriveTimer === 0) {
+        this.audio.setIntensity(this.boss && !this.boss.dying ? 1 : 0);
+        this.renderer.setZoom(1);
+        this.fx.ring(this.player.x, this.player.y, 180, '#5ff7ff', { life: 0.45, width: 3 });
+      }
+    }
+    this.overdriveFlash = Math.max(0, this.overdriveFlash - dt * 2.2);
+    const target = this.overdriveTimer > 0 ? 1 : 0;
+    this.overdriveVisual += (target - this.overdriveVisual) * Math.min(1, dt * 6);
+    if (this.overdriveTimer > 0 && this.boss) this.audio.setIntensity(1);
+  }
 
   // ── 生命周期 ────────────────────────────────────────────
 
@@ -113,6 +180,11 @@ export class Game {
     this.timeScale = 1;
     this.timeScaleTimer = 0;
     this.shotsFired = 0;
+    this.overdriveVisual = 0;
+    this.energy = 0;
+    this.overdriveTimer = 0;
+    this.overdriveFlash = 0;
+    this.grazeCount = 0;
 
     this.player.reset(true);
     this.bullets.reset();
@@ -196,6 +268,7 @@ export class Game {
 
     const big = e.type === 'tank' || e.type === 'elite';
     const gained = this.addScore(e.score);
+    this.addEnergy(big ? OVERDRIVE.killEnergy * 2 : OVERDRIVE.killEnergy);
     this.fx.explosion(e.x, e.y, big ? 1.5 : 0.95, e.type === 'elite' ? C.hostileElite : C.hostileWarm, '#ffffff');
     this.fx.text(e.x, e.y - 10, `+${formatScore(gained)}`, big ? C.uiGold : '#eafcff', big ? 15 : 12);
     this.audio.enemyExplode(big);
@@ -215,7 +288,7 @@ export class Game {
         this.damageEnemy(e, dmg, { silent: true });
       }
     }
-    if (this.boss && !this.boss.dying && this.boss.state !== 'enter') {
+    if (this.boss && !this.boss.dying && this.boss.state !== 'enter' && this.boss.transition <= 0) {
       if (Math.abs(this.boss.x - x) < half + this.boss.radius * 0.8 && this.boss.y < y) {
         if (this.boss.damage(dmg, this)) this._onBossDefeated();
       }
@@ -359,7 +432,12 @@ export class Game {
     }
     const scaled = this.renderer.consumeDt(dt * this.timeScale);
 
-    this.background.update(scaled, this.boss ? 1.5 : 1);
+    this._updateOverdrive(dt);
+    // 爆发期间敌方时间放慢——玩家不变慢，这是子弹时间的全部乐趣
+    const hostileScale = this.overdriveActive ? OVERDRIVE.enemyTimeScale : 1;
+    const hostileDt = scaled * hostileScale;
+
+    this.background.update(scaled * (this.overdriveActive ? 0.55 : 1), this.boss ? 1.5 : 1);
     this.renderer.update(dt);
 
     // 玩家
@@ -383,7 +461,7 @@ export class Game {
     // 敌人
     for (const e of this.enemies) {
       if (e.dead) continue;
-      updateEnemy(e, scaled, this);
+      updateEnemy(e, hostileDt, this);
     }
     // 清理
     for (let i = this.enemies.length - 1; i >= 0; i--) {
@@ -393,12 +471,12 @@ export class Game {
 
     // Boss
     if (this.boss) {
-      this.boss.update(scaled, this);
+      this.boss.update(hostileDt, this);
       if (this.boss.dead) this.boss = null;
     }
 
-    // 子弹
-    this.bullets.update(scaled);
+    // 子弹（追踪弹需要敌人列表；敌方弹幕在爆发期间按 hostileScale 减速）
+    this.bullets.update(scaled, this, hostileScale);
 
     // 碰撞
     this._collide();
@@ -461,6 +539,15 @@ export class Game {
         p.grantShield(6);
         this.fx.text(p.x, p.y - 26, 'SHIELD', C.playerGlow, 13);
         break;
+      case 'weapon': {
+        const kind = p.cycleWeapon();
+        const meta = p.weaponMeta;
+        this.fx.text(p.x, p.y - 30, meta.label, meta.color, 15);
+        this.fx.ring(p.x, p.y, 90, meta.color, { life: 0.5, width: 3 });
+        this.renderer.shake(4, 0.25);
+        this.addScore(300);
+        break;
+      }
       case 'life':
         p.addLife();
         this.fx.text(p.x, p.y - 26, '1 UP', C.uiMagenta, 15);
@@ -469,6 +556,7 @@ export class Game {
       default: break;
     }
     this.addScore(50);
+    this.addEnergy(OVERDRIVE.pickupEnergy);
   }
 
   _collide() {
@@ -488,7 +576,7 @@ export class Game {
         }
       }
       if (s.life <= 0) continue;
-      if (this.boss && this.boss.state === 'fight' && !this.boss.dying) {
+      if (this.boss && this.boss.state === 'fight' && !this.boss.dying && this.boss.transition <= 0) {
         if (circlesHit(s.x, s.y, s.radius, this.boss.x, this.boss.y, this.boss.radius * 0.92)) {
           if (this.boss.damage(s.damage, this)) this._onBossDefeated();
           this.fx.spark(s.x, s.y, C.playerGlow, 2, { speed: [30, 120], size: [1, 2] });
@@ -500,11 +588,19 @@ export class Game {
 
     if (!playerVulnerable) return;
 
-    // 敌弹 × 玩家（核心判定：极小半径）
+    // 敌弹 × 玩家（核心判定：极小半径 → 擦弹判定：一圈更宽的环）
+    const grazeR = PLAYER.radius + OVERDRIVE.grazeRadius;
+    const grazeR2 = grazeR * grazeR;
     for (const s of this.bullets.enemy) {
-      if (circlesHit(s.x, s.y, s.radius * 0.75, p.x, p.y, PLAYER.radius)) {
+      const hitR = s.radius * 0.75 + PLAYER.radius;
+      const d2 = dist2(s.x, s.y, p.x, p.y);
+      if (d2 < hitR * hitR) {
         this.player.hit();
         return;
+      }
+      if (!s.grazed && d2 < grazeR2) {
+        s.grazed = true;
+        this.onGraze(s);
       }
     }
 
@@ -519,7 +615,7 @@ export class Game {
     }
 
     // Boss 本体撞击
-    if (this.boss && this.boss.state === 'fight' && !this.boss.dying) {
+    if (this.boss && this.boss.state === 'fight' && !this.boss.dying && this.boss.transition <= 0) {
       if (circlesHit(this.boss.x, this.boss.y, this.boss.radius * 0.8, p.x, p.y, PLAYER.radius)) {
         this.player.hit();
       }
@@ -573,11 +669,17 @@ export class Game {
       this._drawBomb(ctx);
 
       if (this.bossWarningTimer > 0) this._drawBossWarning(ctx);
+    }
 
+    // 后处理：泛光 + 暗角（世界层结束、HUD 之前——UI 必须保持锐利）
+    this.renderer.postprocess();
+    this.renderer.screenFx(this.overdriveVisual);
+
+    if (this.state !== STATE.MENU) {
       this.hud.draw(ctx);
     }
 
-    this.renderer.drawOverlay();
+    this.renderer.drawFlash();
   }
 
   _drawBomb(ctx) {

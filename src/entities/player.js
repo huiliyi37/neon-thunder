@@ -6,10 +6,10 @@
  *  - 受击后有 2.4s 无敌 + 明显闪烁，避免连锁死亡。
  *  - 开火完全自动，玩家只需要专注走位。
  */
-import { PLAYER, SHOT, WEAPONS, VIEW } from '../config.js';
+import { OVERDRIVE, PLAYER, SHOT, VIEW, WEAPON_META, WEAPON_SPECS, WEAPON_TYPES } from '../config.js';
 import { drawOption, drawPlayer, glow } from '../art/sprites.js';
 import { C } from '../art/palette.js';
-import { clamp, damp, TAU } from '../core/util.js';
+import { clamp, damp, TAU, withAlpha } from '../core/util.js';
 
 export class Player {
   constructor(game) {
@@ -37,12 +37,29 @@ export class Player {
       this.lives = PLAYER.lives;
       this.bombs = PLAYER.bombs;
       this.power = 1;
+      this.weaponType = 'pulse';
     }
   }
 
   get alive() { return this.state === 'alive'; }
-  get weapon() { return WEAPONS[clamp(this.power, 1, WEAPONS.length) - 1]; }
-  get options() { return this.weapon.options; }
+
+  /** 当前武器/等级的完整参数（由 weaponType + power 决定） */
+  get spec() {
+    const table = WEAPON_SPECS[this.weaponType] || WEAPON_SPECS.pulse;
+    return table[clamp(this.power, 1, table.length) - 1];
+  }
+
+  get weaponMeta() { return WEAPON_META[this.weaponType] || WEAPON_META.pulse; }
+  get options() { return this.spec.options || 0; }
+  /** 是否持续发射光束（LASER 型，或 PULSE 满级的附赠激光） */
+  get hasBeam() { return this.spec.kind === 'laser' || this.spec.laser === true; }
+
+  /** 切换到下一种武器（保留等级），返回新类型 */
+  cycleWeapon() {
+    const idx = WEAPON_TYPES.indexOf(this.weaponType);
+    this.weaponType = WEAPON_TYPES[(idx + 1) % WEAPON_TYPES.length];
+    return this.weaponType;
+  }
 
   update(dt, input) {
     this.invuln = Math.max(0, this.invuln - dt);
@@ -96,53 +113,90 @@ export class Player {
   }
 
   _fire(dt) {
-    const w = this.weapon;
+    const spec = this.spec;
+    const kind = spec.kind || 'bullet';
 
-    // 主武器
-    this.fireTimer -= dt;
-    if (this.fireTimer <= 0) {
-      this.fireTimer += w.interval;
-      if (this.fireTimer < -w.interval) this.fireTimer = w.interval; // 防止长时间暂停后爆发式补射
+    if (kind === 'bullet') this._fireBullets(dt, spec);
+    else if (kind === 'homing') this._fireHoming(dt, spec);
 
-      const n = w.count;
-      const half = (n - 1) / 2;
-      for (let i = 0; i < n; i++) {
-        const idx = i - half;
-        const spreadX = idx * w.spread;
-        const angle = -Math.PI / 2 + (half === 0 ? 0 : (idx / half) * w.angle);
-        this.game.bullets.spawnPlayer(
-          this.x + spreadX, this.y - 20, angle, SHOT.speed, w.damage,
-          { size: this.power >= 5 ? 1.15 : 1 },
-        );
-      }
-      this.game.audio.shoot(this.power);
-    }
+    this._fireOptions(dt);
 
-    // 僚机
-    if (this.options > 0) {
-      this.optionTimer -= dt;
-      if (this.optionTimer <= 0) {
-        this.optionTimer += SHOT.optionInterval;
-        for (let i = 0; i < this.options; i++) {
-          const ox = this._optionX(i);
-          this.game.bullets.spawnPlayer(ox, this.y + SHOT.optionOffset.y - 8, -Math.PI / 2, SHOT.optionSpeed, SHOT.optionDamage, { size: 0.7 });
-        }
-        this.game.audio.optionShot();
-      }
-    }
-
-    // 激光（Lv6）
-    if (w.laser) {
-      this.game.audio.setLaser(true);
+    // 光束：LASER 型本体，或 PULSE 满级的附赠激光
+    const beam = this.hasBeam;
+    this.game.audio.setLaser(beam);
+    if (beam) {
+      const width = kind === 'laser' ? spec.width : SHOT.laserWidth;
+      const tick = kind === 'laser' ? spec.tickInterval : SHOT.laserTickInterval;
+      const odDmg = this.game.overdriveActive ? OVERDRIVE.damageScale : 1;
+      const dmg = (kind === 'laser' ? spec.tickDamage : SHOT.laserDps * tick) * odDmg;
       this.laserTick -= dt;
       if (this.laserTick <= 0) {
-        this.laserTick = SHOT.laserTickInterval;
-        const dmg = SHOT.laserDps * SHOT.laserTickInterval;
-        this.game.applyLaserDamage(this.x, this.y - 24, SHOT.laserWidth, dmg);
+        this.laserTick = tick;
+        this.game.applyLaserDamage(this.x, this.y - 24, width, dmg);
       }
-    } else {
-      this.game.audio.setLaser(false);
     }
+  }
+
+  _fireBullets(dt, spec) {
+    const od = this.game.overdriveActive;
+    const interval = spec.interval * (od ? OVERDRIVE.fireRateScale : 1);
+    const dmg = spec.damage * (od ? OVERDRIVE.damageScale : 1);
+
+    this.fireTimer -= dt;
+    if (this.fireTimer > 0) return;
+    this.fireTimer += interval;
+    if (this.fireTimer < -interval) this.fireTimer = interval; // 防止长时间暂停后爆发式补射
+
+    const n = spec.count;
+    const half = (n - 1) / 2;
+    const baseSize = this.power >= 5 ? 1.15 : 1;
+    const size = this.weaponType === 'spread' ? baseSize * 0.72 : baseSize;
+    const color = this.weaponMeta.color;
+
+    for (let i = 0; i < n; i++) {
+      const idx = i - half;
+      const spreadX = idx * spec.spread;
+      const angle = -Math.PI / 2 + (half === 0 ? 0 : (idx / half) * spec.angle);
+      this.game.bullets.spawnPlayer(
+        this.x + spreadX, this.y - 20, angle, SHOT.speed, dmg,
+        { size, color },
+      );
+    }
+    this.game.audio.shoot(this.power);
+  }
+
+  _fireHoming(dt, spec) {
+    const od = this.game.overdriveActive;
+    const interval = spec.interval * (od ? OVERDRIVE.fireRateScale : 1);
+    const dmg = spec.damage * (od ? OVERDRIVE.damageScale : 1);
+
+    this.fireTimer -= dt;
+    if (this.fireTimer > 0) return;
+    this.fireTimer += interval;
+    if (this.fireTimer < -interval) this.fireTimer = interval;
+
+    const n = spec.count;
+    const half = (n - 1) / 2;
+    for (let i = 0; i < n; i++) {
+      const idx = i - half;
+      this.game.bullets.spawnHoming(this.x + idx * 17, this.y - 14, dmg, idx * 0.08);
+    }
+    this.game.audio.shoot(this.power);
+  }
+
+  _fireOptions(dt) {
+    if (this.options <= 0) return;
+    this.optionTimer -= dt;
+    if (this.optionTimer > 0) return;
+    this.optionTimer += SHOT.optionInterval;
+    for (let i = 0; i < this.options; i++) {
+      const ox = this._optionX(i);
+      this.game.bullets.spawnPlayer(
+        ox, this.y + SHOT.optionOffset.y - 8, -Math.PI / 2, SHOT.optionSpeed, SHOT.optionDamage,
+        { size: 0.7, color: '#9ffcff' },
+      );
+    }
+    this.game.audio.optionShot();
   }
 
   _optionX(i) {
@@ -209,9 +263,12 @@ export class Player {
   }
 
   drawLaser(ctx) {
-    if (!this.weapon.laser || this.state !== 'alive') return;
+    if (!this.hasBeam || this.state !== 'alive') return;
     const t = this.game.time;
-    const width = SHOT.laserWidth * (0.85 + Math.sin(t * 40) * 0.08);
+    const spec = this.spec;
+    const baseW = spec.kind === 'laser' ? spec.width : SHOT.laserWidth;
+    const width = baseW * (0.85 + Math.sin(t * 40) * 0.08);
+    const color = this.weaponMeta.color;
     const top = 0;
     const bottom = this.y - 22;
 
@@ -219,18 +276,18 @@ export class Player {
     ctx.globalCompositeOperation = 'lighter';
 
     const g = ctx.createLinearGradient(this.x - width, 0, this.x + width, 0);
-    g.addColorStop(0, 'rgba(95,247,255,0)');
-    g.addColorStop(0.35, 'rgba(95,247,255,0.28)');
-    g.addColorStop(0.5, 'rgba(235,255,255,0.95)');
-    g.addColorStop(0.65, 'rgba(95,247,255,0.28)');
-    g.addColorStop(1, 'rgba(95,247,255,0)');
+    g.addColorStop(0, withAlpha(color, 0));
+    g.addColorStop(0.35, withAlpha(color, 0.30));
+    g.addColorStop(0.5, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.65, withAlpha(color, 0.30));
+    g.addColorStop(1, withAlpha(color, 0));
     ctx.fillStyle = g;
     ctx.fillRect(this.x - width, top, width * 2, bottom - top);
 
     // 流动的能量节点
     for (let i = 0; i < 5; i++) {
       const y = ((t * 900 + i * 160) % (bottom - top + 60)) - 30;
-      glow(ctx, this.x, y, 12, C.playerGlow, 0.45);
+      glow(ctx, this.x, y, 12, color, 0.45);
     }
     ctx.restore();
   }
@@ -244,6 +301,16 @@ export class Player {
     ctx.save();
     ctx.globalAlpha = blink;
     ctx.translate(this.x, this.y);
+
+    // 爆发状态：机体被能量场包裹
+    if (this.game.overdriveActive) {
+      const t = this.game.time;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      glow(ctx, 0, 0, 52 + Math.sin(t * 14) * 8, '#9ffcff', 0.30 + Math.sin(t * 20) * 0.08);
+      glow(ctx, 0, 14, 30, '#ffffff', 0.18);
+      ctx.restore();
+    }
 
     // 护盾光环
     if (this.shieldTimer > 0 || (this.invuln > 0 && this.state === 'alive')) {

@@ -552,6 +552,99 @@ export function drawBoss(ctx, o) {
   ctx.restore();
 }
 
+// ── Boss 二形态：脱离后的核心 ───────────────────────────────
+
+/**
+ * 母舰被击破后核心脱离，变成这个更小、更快、更狂暴的形态。
+ * 视觉语言从「厚重装甲」切换为「高能核心 + 环绕部件」——一眼就能看出阶段变了。
+ */
+export function drawBossCore(ctx, o) {
+  const { t, flash = 0, hpRatio = 1 } = o;
+  const pulse = 0.5 + Math.sin(t * 6) * 0.5;
+
+  // 环境光
+  glow(ctx, 0, 0, 132, C.bossCore, 0.22 + pulse * 0.12);
+
+  // 三个环绕的刃片（带深度感：靠近观者时更亮更大）
+  for (let i = 0; i < 3; i++) {
+    const a = t * 1.7 + (i / 3) * TAU;
+    const depth = (Math.sin(a) + 1) / 2;
+    const ox = Math.cos(a) * 54;
+    const oy = Math.sin(a) * 54 * 0.52;
+    ctx.save();
+    ctx.translate(ox, oy);
+    ctx.rotate(a + t * 1.2);
+    const s = 0.75 + depth * 0.45;
+    ctx.scale(s, s);
+    ctx.beginPath();
+    ctx.moveTo(0, -15);
+    ctx.lineTo(7, -3);
+    ctx.lineTo(0, 15);
+    ctx.lineTo(-7, -3);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(255,120,190,${0.30 + depth * 0.45})`;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,225,245,0.85)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.restore();
+    glow(ctx, ox, oy, 18, C.bossCore, 0.28 + depth * 0.4);
+  }
+
+  // 核心本体
+  const coreR = 31 + Math.sin(t * 4.2) * 2.2;
+  const g = ctx.createRadialGradient(0, -coreR * 0.35, 2, 0, 0, coreR);
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(0.35, C.bossCoreHot);
+  g.addColorStop(1, C.bossCore);
+  ctx.beginPath();
+  ctx.arc(0, 0, coreR, 0, TAU);
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,235,248,0.85)';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  // 逆向旋转的能量环
+  ctx.save();
+  ctx.rotate(-t * 2.3);
+  ctx.strokeStyle = 'rgba(255,220,245,0.55)';
+  ctx.lineWidth = 1.6;
+  ctx.setLineDash([11, 8]);
+  ctx.beginPath();
+  ctx.arc(0, 0, coreR + 13, 0, TAU);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // 正面能量环
+  ctx.save();
+  ctx.rotate(t * 1.1);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, coreR + 20, (coreR + 20) * 0.3, 0, 0, TAU);
+  ctx.stroke();
+  ctx.restore();
+
+  // 血量越低，裂纹越明显
+  if (hpRatio < 0.5) {
+    ctx.strokeStyle = `rgba(0,0,0,${0.3 + (1 - hpRatio) * 0.35})`;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-14, -18); ctx.lineTo(-4, 2); ctx.lineTo(-12, 16);
+    ctx.moveTo(16, -10); ctx.lineTo(6, 6); ctx.lineTo(14, 20);
+    ctx.stroke();
+  }
+
+  if (flash > 0.01) {
+    ctx.beginPath();
+    ctx.arc(0, 0, coreR + 2, 0, TAU);
+    ctx.fillStyle = `rgba(255,255,255,${flash * 0.75})`;
+    ctx.fill();
+  }
+}
+
 // ── 道具 ───────────────────────────────────────────────────
 
 export function drawPickup(ctx, kind, t) {

@@ -45,6 +45,7 @@ export const C = {
 /** 道具配色 */
 export const PICKUP_STYLE = {
   power: { color: '#ffd166', label: 'P', glow: '#ffb703' },
+  weapon: { color: '#b388ff', label: 'W', glow: '#8a5cff' },
   shield: { color: '#5ff7ff', label: 'S', glow: '#1e7bff' },
   bomb: { color: '#ff9f43', label: 'B', glow: '#ff5f1f' },
   life: { color: '#ff6fb5', label: '1', glow: '#ff2d95' },

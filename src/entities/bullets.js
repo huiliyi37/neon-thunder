@@ -1,29 +1,34 @@
 /**
  * 弹丸系统：玩家弹药与敌方弹幕共用一套池化数组。
  * 设计要点：
- *  - 玩家弹走「竖向发光胶囊」缓存精灵，敌方弹走「球体」缓存精灵——零逐帧渐变分配。
- *  - 敌弹必须有极高可读性：白色核心 + 饱和彩环 + 外发光，任何背景上都看得清。
- *  - 越界即回收，数组交换删除，永不 splice 中间元素。
+ *  - 玩家弹走「竖向发光胶囊」缓存精灵（按武器颜色分别缓存），敌方弹走「球体」缓存精灵——
+ *    零逐帧渐变分配。
+ *  - 敌弹必须有极高可读性：白色核心 + 饱和彩环 + 外发光 + 速度拖尾，任何背景上都看得清。
+ *  - HOMING 弹是唯一带「转向」的玩家弹药：慢速起飞、加速追击、有限转向率。
+ *  - 越界即回收，数组交换删除，永不 splice 中间元素（clearEnemyShots 除外，那是整批清空）。
  */
-import { VIEW } from '../config.js';
+import { SHOT, VIEW } from '../config.js';
 import { C } from '../art/palette.js';
-import { drawOrbAt } from '../art/sprites.js';
-import { swapRemove, TAU, withAlpha } from '../core/util.js';
+import { drawOrbAt, glow } from '../art/sprites.js';
+import { clamp, swapRemove, TAU, withAlpha } from '../core/util.js';
 
 const shotPool = [];
 const enemyPool = [];
 
 function newShot() {
-  return { x: 0, y: 0, vx: 0, vy: 0, radius: 3, damage: 1, size: 1, kind: 'pulse', life: 4, age: 0, spin: 0 };
+  return {
+    x: 0, y: 0, vx: 0, vy: 0, radius: 3, damage: 1, size: 1, kind: 'pulse',
+    life: 4, age: 0, spin: 0, color: C.playerGlow, angle: 0,
+  };
 }
 
-function resetShot(s) {
-  s.life = 0;
-}
+// ── 玩家弹精灵（按颜色缓存） ───────────────────────────────
+const pulseSprites = new Map();
 
-let pulseSprite = null;
-function getPulseSprite() {
-  if (pulseSprite) return pulseSprite;
+function getPulseSprite(color) {
+  let sprite = pulseSprites.get(color);
+  if (sprite) return sprite;
+
   const w = 20, h = 38, k = 3;          // 3× 超采样，逻辑尺寸 20×38
   const cv = document.createElement('canvas');
   cv.width = w * k;
@@ -32,18 +37,17 @@ function getPulseSprite() {
   g.scale(k, k);
 
   const vg = g.createLinearGradient(0, 0, 0, h);
-  vg.addColorStop(0, 'rgba(120,240,255,0)');
-  vg.addColorStop(0.18, 'rgba(140,250,255,0.55)');
-  vg.addColorStop(0.55, 'rgba(235,255,255,1)');
-  vg.addColorStop(0.86, 'rgba(120,240,255,0.55)');
-  vg.addColorStop(1, 'rgba(80,220,255,0)');
+  vg.addColorStop(0, withAlpha(color, 0));
+  vg.addColorStop(0.18, withAlpha(color, 0.55));
+  vg.addColorStop(0.55, 'rgba(240,255,255,1)');
+  vg.addColorStop(0.86, withAlpha(color, 0.55));
+  vg.addColorStop(1, withAlpha(color, 0));
 
   g.fillStyle = vg;
   g.beginPath();
   g.roundRect ? g.roundRect(w / 2 - 2.6, 0, 5.2, h, 3) : g.rect(w / 2 - 2.6, 0, 5.2, h);
   g.fill();
 
-  // 核心亮线
   const core = g.createLinearGradient(0, 0, 0, h);
   core.addColorStop(0, 'rgba(255,255,255,0)');
   core.addColorStop(0.5, 'rgba(255,255,255,0.95)');
@@ -51,16 +55,16 @@ function getPulseSprite() {
   g.fillStyle = core;
   g.fillRect(w / 2 - 0.9, h * 0.1, 1.8, h * 0.8);
 
-  // 两侧光晕
   const hg = g.createLinearGradient(0, 0, w, 0);
-  hg.addColorStop(0, 'rgba(95,247,255,0)');
-  hg.addColorStop(0.5, 'rgba(95,247,255,0.30)');
-  hg.addColorStop(1, 'rgba(95,247,255,0)');
+  hg.addColorStop(0, withAlpha(color, 0));
+  hg.addColorStop(0.5, withAlpha(color, 0.30));
+  hg.addColorStop(1, withAlpha(color, 0));
   g.fillStyle = hg;
   g.fillRect(0, h * 0.12, w, h * 0.76);
 
-  pulseSprite = { cv, w, h };
-  return pulseSprite;
+  sprite = { cv, w, h };
+  pulseSprites.set(color, sprite);
+  return sprite;
 }
 
 export class Bullets {
@@ -86,8 +90,28 @@ export class Bullets {
     s.size = opts.size ?? 1;
     s.radius = 4.2 * (opts.size ?? 1);
     s.kind = opts.kind || 'pulse';
+    s.color = opts.color || C.playerGlow;
     s.life = opts.life ?? 3;
     s.age = 0;
+    s.angle = angle;
+    this.player.push(s);
+  }
+
+  /** 追踪导弹：慢速起飞 → 加速 → 有限转向率追击最近目标 */
+  spawnHoming(x, y, damage, angleOffset = 0) {
+    const s = shotPool.pop() || newShot();
+    const a = -Math.PI / 2 + angleOffset;
+    s.x = x; s.y = y;
+    s.vx = Math.cos(a) * 250;
+    s.vy = Math.sin(a) * 250;
+    s.damage = damage;
+    s.size = 1;
+    s.radius = 7;
+    s.kind = 'homing';
+    s.color = '#7dffd4';
+    s.life = SHOT.homingLife;
+    s.age = 0;
+    s.angle = a;
     this.player.push(s);
   }
 
@@ -124,32 +148,76 @@ export class Bullets {
 
   // ── 更新 ────────────────────────────────────────────────
 
-  update(dt) {
+  update(dt, game = null, hostileScale = 1) {
     const player = this.player;
     for (let i = player.length - 1; i >= 0; i--) {
       const s = player[i];
+
+      if (s.kind === 'homing' && game) {
+        this._updateHoming(s, dt, game);
+      }
+
       s.x += s.vx * dt;
       s.y += s.vy * dt;
       s.life -= dt;
       s.age += dt;
-      if (s.life <= 0 || s.y < -40 || s.y > VIEW.h + 40 || s.x < -40 || s.x > VIEW.w + 40) {
+      if (s.life <= 0 || s.y < -50 || s.y > VIEW.h + 50 || s.x < -60 || s.x > VIEW.w + 60) {
         swapRemove(player, i);
         shotPool.push(s);
       }
     }
 
+    // 敌方弹幕整体受 hostileScale 影响（爆发时的子弹时间）
+    const edt = dt * hostileScale;
     const enemy = this.enemy;
     for (let i = enemy.length - 1; i >= 0; i--) {
       const s = enemy[i];
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      s.life -= dt;
+      s.x += s.vx * edt;
+      s.y += s.vy * edt;
+      s.life -= edt;
       s.age += dt;
       if (s.life <= 0 || s.y < -60 || s.y > VIEW.h + 60 || s.x < -60 || s.x > VIEW.w + 60) {
         swapRemove(enemy, i);
         enemyPool.push(s);
       }
     }
+  }
+
+  _updateHoming(s, dt, game) {
+    // 加速到巡航速度
+    const sp = Math.hypot(s.vx, s.vy) || 1;
+    const targetSp = Math.min(SHOT.homingSpeed, sp + 1100 * dt);
+    let angle = Math.atan2(s.vy, s.vx);
+
+    // 锁定最近目标
+    let target = null;
+    let best = Infinity;
+    for (const e of game.enemies) {
+      if (e.dead) continue;
+      const dx = e.x - s.x, dy = e.y - s.y;
+      const d = dx * dx + dy * dy;
+      if (d < best) { best = d; target = e; }
+    }
+    if (game.boss && !game.boss.dying && game.boss.state !== 'enter') {
+      const dx = game.boss.x - s.x, dy = game.boss.y - s.y;
+      const d = dx * dx + dy * dy;
+      if (d < best) { best = d; target = game.boss; }
+    }
+
+    if (target) {
+      const desired = Math.atan2(target.y - s.y, target.x - s.x);
+      let diff = desired - angle;
+      while (diff > Math.PI) diff -= TAU;
+      while (diff < -Math.PI) diff += TAU;
+      angle += clamp(diff, -SHOT.homingTurnRate * dt, SHOT.homingTurnRate * dt);
+    } else {
+      // 无目标时缓慢爬升，不要直冲屏幕外
+      angle += clamp(-Math.PI / 2 - angle, -3 * dt, 3 * dt);
+    }
+
+    s.vx = Math.cos(angle) * targetSp;
+    s.vy = Math.sin(angle) * targetSp;
+    s.angle = angle;
   }
 
   /** 炸弹/清屏：把敌弹转成碎裂粒子后移除 */
@@ -165,13 +233,51 @@ export class Bullets {
   // ── 绘制 ────────────────────────────────────────────────
 
   drawPlayer(ctx) {
-    const sprite = getPulseSprite();
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (const s of this.player) {
-      const w = sprite.w * s.size;
-      const h = sprite.h * s.size;
-      ctx.drawImage(sprite.cv, s.x - w / 2, s.y - h / 2, w, h);
+      if (s.kind === 'homing') {
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        ctx.rotate(s.angle + Math.PI / 2);
+        // 尾焰
+        const flame = 12 + Math.sin(s.age * 40) * 4;
+        const fg = ctx.createLinearGradient(0, 4, 0, 4 + flame);
+        fg.addColorStop(0, 'rgba(125,255,212,0.9)');
+        fg.addColorStop(0.5, 'rgba(95,247,255,0.45)');
+        fg.addColorStop(1, 'rgba(95,247,255,0)');
+        ctx.fillStyle = fg;
+        ctx.beginPath();
+        ctx.moveTo(-3, 5);
+        ctx.quadraticCurveTo(0, 5 + flame, 3, 5);
+        ctx.closePath();
+        ctx.fill();
+        // 弹体
+        ctx.fillStyle = '#d8fff2';
+        ctx.beginPath();
+        ctx.moveTo(0, -9);
+        ctx.lineTo(3.4, 2);
+        ctx.lineTo(0, 5);
+        ctx.lineTo(-3.4, 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        glow(ctx, s.x, s.y, 16, '#7dffd4', 0.55);
+      } else {
+        const sprite = getPulseSprite(s.color);
+        const w = sprite.w * s.size;
+        const h = sprite.h * s.size;
+        // 按飞行方向旋转——扇形弹道必须能看出角度，否则读不出弹幕形状
+        if (s.angle === -Math.PI / 2) {
+          ctx.drawImage(sprite.cv, s.x - w / 2, s.y - h / 2, w, h);
+        } else {
+          ctx.save();
+          ctx.translate(s.x, s.y);
+          ctx.rotate(s.angle + Math.PI / 2);
+          ctx.drawImage(sprite.cv, -w / 2, -h / 2, w, h);
+          ctx.restore();
+        }
+      }
     }
     ctx.restore();
   }
@@ -180,6 +286,18 @@ export class Bullets {
     ctx.save();
     for (const s of this.enemy) {
       if (s.kind === 'orb') {
+        // 速度拖尾：先画一条向后渐隐的线，再画本体
+        const sp = Math.hypot(s.vx, s.vy) || 1;
+        const tailX = s.x - (s.vx / sp) * s.radius * 4.2;
+        const tailY = s.y - (s.vy / sp) * s.radius * 4.2;
+        ctx.strokeStyle = withAlpha(s.color, 0.26);
+        ctx.lineCap = 'round';
+        ctx.lineWidth = s.radius * 1.15;
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(tailX, tailY);
+        ctx.stroke();
+
         drawOrbAt(ctx, s.x, s.y, s.radius, s.color, 1, '#ffffff');
       } else if (s.kind === 'diamond') {
         ctx.save();

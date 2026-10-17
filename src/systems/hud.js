@@ -3,7 +3,7 @@
  * 信息优先级：Boss 血条 > 生命/炸弹 > 分数 > 连击 > 武器等级。
  * 所有文字走等宽字体 + 固定位置，避免数字跳动导致画面抖动。
  */
-import { PLAYER, VIEW, WEAPONS } from '../config.js';
+import { OVERDRIVE, PLAYER, VIEW, WEAPONS } from '../config.js';
 import { C } from '../art/palette.js';
 import { clamp, easeOutCubic, formatScore, withAlpha } from '../core/util.js';
 
@@ -55,6 +55,7 @@ export class HUD {
     this._drawScore(ctx);
     this._drawLivesAndBombs(ctx);
     this._drawWeapon(ctx);
+    this._drawEnergy(ctx);
     if (this.game.combo > 1) this._drawCombo(ctx);
     if (this.game.boss && this.game.boss.state !== 'enter') this._drawBossBar(ctx);
     this._drawBanner(ctx);
@@ -155,10 +156,17 @@ export class HUD {
 
   _drawWeapon(ctx) {
     const power = this.game.player.power;
+    const meta = this.game.player.weaponMeta;
     const right = VIEW.w - 16;
     const baseY = VIEW.h - 22;
     ctx.save();
     ctx.textAlign = 'right';
+
+    // 武器流派名（颜色随武器变化，玩家一眼知道当前弹药类型）
+    ctx.font = `700 10px ${MONO}`;
+    ctx.fillStyle = meta.color;
+    ctx.fillText(meta.label, right, baseY - 36);
+
     ctx.font = `500 9px ${MONO}`;
     ctx.fillStyle = C.uiDim;
     ctx.fillText('POWER', right, baseY - 22);
@@ -182,8 +190,93 @@ export class HUD {
     ctx.restore();
   }
 
-  _drawCombo(ctx) {
-    const combo = this.game.combo;
+  /** 爆发能量槽：左侧竖条，满槽时金色脉动并提示操作方式 */
+  _drawEnergy(ctx) {
+    const g = this.game;
+    const active = g.overdriveActive;
+    const ratio = active
+      ? clamp(g.overdriveTimer / OVERDRIVE.duration, 0, 1)
+      : clamp(g.energyRatio, 0, 1);
+    const ready = g.overdriveReady;
+
+    const x = 14;
+    const w = 7;
+    const bottom = VIEW.h - 64;
+    const h = 146;
+    const top = bottom - h;
+
+    ctx.save();
+
+    // 槽底
+    ctx.fillStyle = 'rgba(95,247,255,0.10)';
+    ctx.fillRect(x, top, w, h);
+
+    // 填充（从下往上）
+    const fh = h * ratio;
+    if (fh > 0.5) {
+      const grad = ctx.createLinearGradient(0, bottom, 0, top);
+      if (active) {
+        grad.addColorStop(0, '#5ff7ff');
+        grad.addColorStop(1, '#ffffff');
+      } else if (ready) {
+        grad.addColorStop(0, '#ffb703');
+        grad.addColorStop(1, '#fff3c4');
+      } else {
+        grad.addColorStop(0, '#1e7bff');
+        grad.addColorStop(1, '#9ffcff');
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, bottom - fh, w, fh);
+    }
+
+    // 分段刻线
+    ctx.fillStyle = 'rgba(4,6,15,0.55)';
+    for (let i = 1; i < 6; i++) ctx.fillRect(x, top + (h / 6) * i, w, 1);
+
+    // 边框
+    ctx.strokeStyle = ready ? withAlpha('#ffd166', 0.7) : 'rgba(95,247,255,0.30)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x - 0.5, top - 0.5, w + 1, h + 1);
+
+    ctx.font = `600 8px ${MONO}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = ready || active ? C.uiGold : C.uiDim;
+    ctx.fillText('OD', x + w / 2, top - 6);
+
+    if (ready) {
+      const pulse = 0.5 + Math.sin(g.time * 9) * 0.5;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = withAlpha('#ffd166', 0.10 + pulse * 0.20);
+      ctx.fillRect(x - 4, top - 4, w + 8, h + 8);
+      ctx.globalCompositeOperation = 'source-over';
+
+      // 提示贴在能量条右侧，避开自机与弹幕
+      ctx.textAlign = 'left';
+      ctx.font = `600 9px ${MONO}`;
+      ctx.fillStyle = withAlpha('#ffd166', 0.55 + pulse * 0.45);
+      ctx.fillText('OVERDRIVE READY', x + 14, top + 14);
+      ctx.font = `500 8px ${MONO}`;
+      ctx.fillStyle = withAlpha('#eafcff', 0.40 + pulse * 0.25);
+      ctx.fillText('E  /  长按屏幕', x + 14, top + 28);
+    }
+
+    if (active) {
+      const pulse = 0.5 + Math.sin(g.time * 18) * 0.5;
+      ctx.textAlign = 'left';
+      ctx.font = `700 10px ${MONO}`;
+      ctx.fillStyle = withAlpha('#9ffcff', 0.7 + pulse * 0.3);
+      ctx.fillText('OVERDRIVE', x + 14, top + 14);
+      ctx.font = `500 8px ${MONO}`;
+      ctx.fillStyle = withAlpha('#eafcff', 0.45);
+      ctx.fillText(`${g.overdriveTimer.toFixed(1)}s`, x + 14, top + 28);
+      ctx.fillStyle = withAlpha('#eafcff', 0.30);
+      ctx.fillText(`敌方时间 ×${OVERDRIVE.enemyTimeScale}`, x + 14, top + 40);
+    }
+
+    ctx.restore();
+  }
+
+  _drawCombo(ctx) {    const combo = this.game.combo;
     const mult = this.game.multiplier;
     ctx.save();
     ctx.textAlign = 'right';
@@ -213,7 +306,13 @@ export class HUD {
     ctx.font = `600 9px ${MONO}`;
     ctx.textAlign = 'center';
     ctx.fillStyle = withAlpha(C.bossCore, 0.9);
-    ctx.fillText(spaceOut('DREADNOUGHT'), VIEW.w / 2, y - 7);
+    const isCore = boss.form === 1;
+    ctx.fillText(spaceOut(isCore ? 'CORE OVERRIDE' : 'DREADNOUGHT'), VIEW.w / 2, y - 7);
+
+    ctx.textAlign = 'right';
+    ctx.font = `600 8px ${MONO}`;
+    ctx.fillStyle = withAlpha(C.uiMagenta, 0.75);
+    ctx.fillText(`PHASE ${isCore ? 2 : 1}/2`, VIEW.w - 36, y - 7);
 
     // 底槽
     ctx.fillStyle = 'rgba(255,45,149,0.12)';

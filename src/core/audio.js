@@ -207,6 +207,25 @@ export class AudioEngine {
     this._tone({ freq: 420, to: 260, type: 'square', time: t, decay: 0.06, peak: 0.022 });
   }
 
+  /** 擦弹：极短的高频亮音，密集但必须不刺耳（节流 + 低音量） */
+  graze() {
+    if (!this.ready || this._throttled('graze', 55)) return;
+    const t = this.ctx.currentTime;
+    this._tone({ freq: 1900, to: 2900, type: 'sine', time: t, decay: 0.035, peak: 0.018 });
+  }
+
+  /** 爆发启动：上行扫频 + 冲击噪声 */
+  overdrive() {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    this._tone({
+      freq: 180, to: 1900, type: 'sawtooth', time: t, attack: 0.06, decay: 0.75, peak: 0.13,
+      filter: { type: 'lowpass', from: 400, to: 7000, q: 2 },
+    });
+    this._tone({ freq: 90, to: 760, type: 'square', time: t + 0.05, decay: 0.65, peak: 0.09 });
+    this._noiseBurst({ time: t, dur: 0.85, peak: 0.15, filter: 'bandpass', from: 900, to: 7200, q: 0.8 });
+  }
+
   enemyExplode(big = false) {
     if (!this.ready) return;
     const t = this.ctx.currentTime;

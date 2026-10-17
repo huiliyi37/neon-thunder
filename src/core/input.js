@@ -11,6 +11,7 @@ const KEY_ACTIONS = {  ArrowUp: 'up', KeyW: 'up',
   ArrowRight: 'right', KeyD: 'right',
   ShiftLeft: 'focus', ShiftRight: 'focus',
   Space: 'bomb', KeyX: 'bomb', KeyJ: 'bomb',
+  KeyE: 'overdrive', KeyK: 'overdrive',
   KeyP: 'pause', Escape: 'pause',
   KeyM: 'mute',
   Enter: 'confirm', NumpadEnter: 'confirm',
@@ -69,6 +70,8 @@ export class Input {
     };
 
     let lastX = 0, lastY = 0;
+    let pressAt = 0;
+    let pressMoved = 0;
 
     canvas.addEventListener('pointerdown', (e) => {
       this._fireGesture();
@@ -78,6 +81,8 @@ export class Input {
       const { r } = rectScale();
       lastX = e.clientX - r.left;
       lastY = e.clientY - r.top;
+      pressAt = performance.now();
+      pressMoved = 0;
 
       // 双击（400ms 内）→ 炸弹
       const now = performance.now();
@@ -96,13 +101,19 @@ export class Input {
       const y = e.clientY - r.top;
       this.pointerDelta.x += ((x - lastX) / r.width) * VIEW.w;
       this.pointerDelta.y += ((y - lastY) / r.height) * VIEW.h;
+      pressMoved += Math.abs(x - lastX) + Math.abs(y - lastY);
       lastX = x;
       lastY = y;
     });
 
     const release = (e) => {
       if (e && e.pointerId !== undefined) canvas.releasePointerCapture?.(e.pointerId);
+      // 长按（>380ms 且几乎没移动）→ 爆发；避免与拖动移动、双击炸弹冲突
+      if (this.pointerDown && pressAt && performance.now() - pressAt > 380 && pressMoved < 14) {
+        this.pressed.add('overdrive');
+      }
       this.pointerDown = false;
+      pressAt = 0;
       // 保留 pointerActive 一小段以免手指抬起瞬间产生跳变；由 endFrame 统一复位
     };
     canvas.addEventListener('pointerup', release);
