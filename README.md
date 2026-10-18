@@ -1,5 +1,7 @@
 # THUNDER · 雷霆战机
 
+**[▶ 在线试玩](https://huiliyi37.github.io/neon-thunder/)** · [GitHub 仓库](https://github.com/huiliyi37/neon-thunder) · MIT License
+
 一个零依赖、纯原生 ES Modules + Canvas 2D 的竖版弹幕射击游戏。所有战机、敌机、Boss、子弹、粒子与背景都由代码实时绘制，所有音效与芯片音乐都由 WebAudio 实时合成——**没有任何图片或音频资源文件**，克隆下来起个静态服务就能玩。
 
 ```
